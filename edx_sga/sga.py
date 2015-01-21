@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 This block defines a Staff Graded Assignment.  Students are shown a rubric
 and invited to upload a file which is then graded by staff.
@@ -463,7 +464,8 @@ def load_resource(resource_path):
     Gets the content of a resource
     """
     resource_content = pkg_resources.resource_string(__name__, resource_path)
-    return unicode(resource_content)
+
+    return resource_content
 
 
 def render_template(template_path, context={}):

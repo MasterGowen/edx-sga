@@ -3,35 +3,36 @@
 <div class="sga-block" data-state="{{ student_state }}" 
      data-staff="{{ is_course_staff }}">
   <script type="text/template" id="sga-tmpl">
+  <h1>Upload your file</h1>
     <% if (uploaded) { %>
-      <p><b>File uploaded</b> 
+      <p><b>Загруженный файл: </b>
         <a href="<%= downloadUrl %>"><%= uploaded.filename %></a></p>
     <% } else { %>
-      <p>No file has been uploaded.</p>
+      <p>Файл не был загружен.</p>
     <% } %>
     <% if (graded) { %>
-      <p>Your score is <%= graded.score %> / <%= max_score %><br/>
+      <p>Ваша оценка:<span style="padding: 6px; background-color: rgb(229, 0, 121);font-weight: bold;margin-left: 1em;"> <%= graded.score %> / <%= max_score %></span><br/>
         <% if (graded.comment) { %>
-          <b>Instructor comment</b> <%= graded.comment %>
+          <b>Комментарий преподавателя: </b> <%= graded.comment %>
         <% } %>
         <% if (annotated) { %><br/>
-          <b>Annotated file from instructor</b>
+          <b>Файл, отправленный преподавателем: </b>
           <a href="<%= annotatedUrl %>"><%= annotated.filename %></a>
         <% } %>
       </p>
     <% } else if (uploaded) { %>
-      {% trans "This assignment has not yet been graded." %}
+      <p>Оценка ещё не получена.</p>
     <% } %>
     <% if (upload_allowed) { %>
     <p>
       <% if (uploaded) { %>
-        {% trans "Upload a different file" %}
+        Загрузить другой файл
       <% } else { %>
-        {% trans "Upload your assignment" %}
+        Загрузить файл
       <% } %>
       <div class="upload">
         <input class="fileupload" type="file" name="assignment"/>
-        <button>Select a file</button>
+        <button>Выбрать файл</button>
       </div>
     </p>
     <% } %>
@@ -47,12 +48,12 @@
   <script type="text/template" id="sga-grading-tmpl">
     <table class="gridtable">
       <tr>
-        <th>Username</th>
-        <th>Name</th>
-        <th>Filename</th>
-        <th>Uploaded</th>
-        <th>Grade</th>
-        <th>Annotated</th>
+        <th>Имя пользователя</th>
+        <th>Полное имя</th>
+        <th>Название файла</th>
+        <th>Загружен</th>
+        <th>Оценка</th>
+        <th>Ответ преподавателя</th>
       </tr>
       <% for (var i = 0; i < assignments.length; i++) { %>
       <%     var assignment = assignments[i]; %>
@@ -80,13 +81,13 @@
           </td>
           <td>
             <a class="enter-grade-button" href="#{{ id }}-enter-grade">
-              {% trans "Enter grade" %}
+              Поставить оценку
             </a>
           </td>
           <td>
             <div class="upload">
               <input class="fileupload" type="file" name="annotated"/>
-              <button>Upload annotated file</button>
+              <button>Загрузить ответ</button>
             </div>
           </td>
         </tr>
@@ -96,37 +97,37 @@
 
   <div aria-hidden="true" class="wrap-instructor-info">
     <a class="instructor-info-action" id="grade-submissions-button"
-       href="#{{ id }}-grade">{% trans "Grade Submissions" %}</a>
+       href="#{{ id }}-grade">Журнал оценок</a>
   </div>
 
   <section aria-hidden="true" class="modal staff-modal" id="{{ id }}-grade">
     <div class="inner-wrapper" style="color: black">
-      <header><h2>{% trans "Staff Graded Assignment" %}</h2></header>
+      <header><h2>Загрузка файла</h2></header>
       <br/>
       <div id="grade-info" style="display: block;">
-        Loading...
+        Загрузка...
       </div>
     </div>
   </section>
 
-  <section aria-hidden="true" class="modal grade-modal" id="{{ id }}-enter-grade">
+  <section aria-hidden="true" class="modal grade-modal" id="{{ id }}-enter-grade" style="display: none; background-color: #ABB8C2; padding: 20px;">
     <div class="inner-wrapper" style="color: black">
-      <header><h2>{% trans "Enter Grade" %}</h2></header>
+      <header><h2 style="margin: 0;">Поставить оценку</h2></header>
       <br/>
       <div style="display: block;">
         <form id="enter-grade-form">
           <input id="module_id-input" type="hidden" name="module_id"/>
-          <div>Grade for <span id="student-name"/></div>
-          <div>Grade: <input id="grade-input" name="grade"/>
+          <div>Слушатель: <span id="student-name" style="font-weight: bold; padding-left: 1em;"/></div>
+          <div>Баллы (из 100): <div style="padding-left: 1em;"><input id="grade-input" style="font-weight: bold;" name="grade"/></div>
             <span class="error"></span></div>
-          <div>Comment: <textarea id="comment-input" name="comment" rows="4"></textarea></div>
+          <div>Комментарий (видимый слушателю):<br /> <textarea id="comment-input" name="comment" rows="4"></textarea></div>
           <div>
-            <button type="submit">{% trans "Submit" %}</button>
+            <button type="submit">Отправить</button>
             <button type="button" id="enter-grade-cancel">
-              {% trans "Cancel" %}
+              Отменить
             </button>
             <button type="button" id="remove-grade">
-              {% trans "Remove grade" %}
+              Удалить оценку
             </button>
           </div>
         </form>
