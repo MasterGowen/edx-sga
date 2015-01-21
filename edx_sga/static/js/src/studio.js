@@ -1,4 +1,6 @@
 function StaffGradedAssignmentXBlock(runtime, element, server) {
+    console.log("wtf " + server);
+
     var saveUrl = runtime.handlerUrl(element, 'save_sga');
 
     var validators = {
@@ -11,6 +13,8 @@ function StaffGradedAssignmentXBlock(runtime, element, server) {
     }
 
     function save() {
+        console.log(this);
+
         var view = this;
         view.runtime.notify('save', {state: 'start'});
 

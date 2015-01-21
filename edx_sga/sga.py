@@ -15,36 +15,19 @@ from functools import partial
 
 from courseware.models import StudentModule
 
-from django.core.exceptions import PermissionDenied
 from django.core.files import File
 from django.core.files.storage import default_storage
 from django.template import Context, Template
 
-from student.models import user_by_anonymous_id
-from submissions import api as submissions_api
-from submissions.models import StudentItem as SubmissionsStudent
-
 from webob.response import Response
 
 from xblock.core import XBlock
-from xblock.fields import DateTime, Scope, String, Float, Integer
+from xblock.fields import Boolean, DateTime, Scope, String, Float
 from xblock.fragment import Fragment
 
 from xmodule.util.duedate import get_extended_due_date
 
-
 log = logging.getLogger(__name__)
-
-
-def reify(meth):
-    """
-    Property which caches value so it is only computed once.
-    """
-    def getter(inst):
-        value = meth(inst)
-        inst.__dict__[meth.__name__] = value
-        return value
-    return property(getter)
 
 
 class StaffGradedAssignmentXBlock(XBlock):
@@ -78,12 +61,19 @@ class StaffGradedAssignmentXBlock(XBlock):
         scope=Scope.settings
     )
 
-    staff_score = Integer(
-        display_name="Score assigned by non-instructor staff",
-        help=("Score will need to be approved by instructor before being "
-              "published."),
+    score = Float(
+        display_name="Grade score",
         default=None,
-        scope=Scope.settings
+        help=("Grade score given to assignment by staff."),
+        values={"min": 0, "step": .1},
+        scope=Scope.user_state
+    )
+
+    score_published = Boolean(
+        display_name="Whether score has been published.",
+        help=("This is a terrible hack, an implementation detail."),
+        default=True,
+        scope=Scope.user_state
     )
 
     comment = String(
@@ -91,6 +81,34 @@ class StaffGradedAssignmentXBlock(XBlock):
         default='',
         scope=Scope.user_state,
         help="Feedback given to student by instructor."
+    )
+
+    uploaded_sha1 = String(
+        display_name="Upload SHA1",
+        scope=Scope.user_state,
+        default=None,
+        help="sha1 of the file uploaded by the student for this assignment."
+    )
+
+    uploaded_filename = String(
+        display_name="Upload file name",
+        scope=Scope.user_state,
+        default=None,
+        help="The name of the file uploaded for this assignment."
+    )
+
+    uploaded_mimetype = String(
+        display_name="Mime type of uploaded file",
+        scope=Scope.user_state,
+        default=None,
+        help="The mimetype of the file uploaded for this assignment."
+    )
+
+    uploaded_timestamp = DateTime(
+        display_name="Timestamp",
+        scope=Scope.user_state,
+        default=None,
+        help="When the file was uploaded"
     )
 
     annotated_sha1 = String(
@@ -124,61 +142,28 @@ class StaffGradedAssignmentXBlock(XBlock):
     def max_score(self):
         return self.points
 
-    @reify
-    def block_id(self):
-        # cargo culted gibberish
-        return self.scope_ids.usage_id
-
-    def student_submission_id(self, id=None):
-        """
-        Returns dict required by the submissions app for creating and
-        retrieving submissions for a particular student.
-        """
-        if id is None:
-            id = self.xmodule_runtime.anonymous_student_id
-            assert id != 'MOCK', "Forgot to call 'personalize' in test."
-        return {
-            "student_id": id,
-            "course_id": self.course_id,
-            "item_id": self.block_id,
-            "item_type": 'sga',  # ???
-        }
-
-    def get_submission(self, id=None):
-        """
-        Get student's most recent submission.
-        """
-        submissions = submissions_api.get_submissions(
-            self.student_submission_id(id))
-        if submissions:
-            # If I understand docs correctly, most recent submission should
-            # be first
-            return submissions[0]
-
-    def get_score(self, id=None):
-        """
-        Get student's current score.
-        """
-        score = submissions_api.get_score(self.student_submission_id(id))
-        if score:
-            return score['points_earned']
-
-    @reify
-    def score(self):
-        return self.get_score()
-
     def student_view(self, context=None):
         """
         The primary view of the StaffGradedAssignmentXBlock, shown to students
         when viewing courses.
         """
+        # Ideally we would do this when the score is entered.  This write on
+        # read pattern is pretty bad.  Currently, though, the code in the
+        # courseware application that handles the grade event will puke if the
+        # user_id for the event is other than the logged in user.
+        if not self.score_published:
+            self.runtime.publish(self, 'grade', {
+                'value': self.score,
+                'max_value': self.max_score(),
+            })
+            self.score_published = True
+
         context = {
             "student_state": json.dumps(self.student_state()),
             "id": self.location.name.replace('.', '_')
         }
         if self.show_staff_grading_interface():
             context['is_course_staff'] = True
-            self.update_staff_debug_context(context)
 
         fragment = Fragment()
         fragment.add_content(
@@ -192,23 +177,13 @@ class StaffGradedAssignmentXBlock(XBlock):
         fragment.initialize_js('StaffGradedAssignmentXBlock')
         return fragment
 
-    def update_staff_debug_context(self, context):
-        published = self.start
-        context['is_released'] = published and published < _now()
-        context['location'] = self.location
-        context['category'] = type(self).__name__
-        context['fields'] = [
-            (name, field.read_from(self))
-            for name, field in self.fields.items()]
-
     def student_state(self):
         """
         Returns a JSON serializable representation of student's state for
         rendering in client view.
         """
-        submission = self.get_submission()
-        if submission:
-            uploaded = {"filename": submission['answer']['filename']}
+        if self.uploaded_sha1:
+            uploaded = {"filename": self.uploaded_filename}
         else:
             uploaded = None
 
@@ -217,9 +192,8 @@ class StaffGradedAssignmentXBlock(XBlock):
         else:
             annotated = None
 
-        score = self.score
-        if score is not None:
-            graded = {'score': score, 'comment': self.comment}
+        if self.score is not None:
+            graded = {'score': self.score, 'comment': self.comment}
         else:
             graded = None
 
@@ -228,57 +202,32 @@ class StaffGradedAssignmentXBlock(XBlock):
             "annotated": annotated,
             "graded": graded,
             "max_score": self.max_score(),
+            "published": self.score_published,
             "upload_allowed": self.upload_allowed(),
         }
 
     def staff_grading_data(self):
-        def get_student_data():
-            # Submissions doesn't have API for this, just use model directly
-            students = SubmissionsStudent.objects.filter(
-                course_id=self.course_id,
-                item_id=self.block_id)
-            for student in students:
-                submission = self.get_submission(student.student_id)
-                if not submission:
-                    continue
-                user = user_by_anonymous_id(student.student_id)
-                module, _ = StudentModule.objects.get_or_create(
-                    course_id=self.course_id,
-                    module_state_key=self.location,
-                    student=user,
-                    defaults={
-                        'state': '{}',
-                        'module_type': self.category,
-                    })
-                state = json.loads(module.state)
-                score = self.get_score(student.student_id)
-                approved = score is not None
-                if score is None:
-                    score = state.get('staff_score')
-                    needs_approval = score is not None
-                else:
-                    needs_approval = False
-                instructor = self.is_instructor()
-                yield {
-                    'module_id': module.id,
-                    'student_id': student.student_id,
-                    'submission_id': submission['uuid'],
-                    'username': module.student.username,
-                    'fullname': module.student.profile.name,
-                    'filename': submission['answer']["filename"],
-                    'timestamp': submission['created_at'].strftime(
-                        DateTime.DATETIME_FORMAT
-                    ),
-                    'score': score,
-                    'approved': approved,
-                    'needs_approval': instructor and needs_approval,
-                    'may_grade': instructor or not approved,
-                    'annotated': state.get("annotated_filename"),
-                    'comment': state.get("comment", ''),
-                }
+        def get_student_data(module):
+            state = json.loads(module.state)
+            return {
+                'module_id': module.id,
+                'username': module.student.username,
+                'fullname': module.student.profile.name,
+                'filename': state.get("uploaded_filename"),
+                'timestamp': state.get("uploaded_timestamp"),
+                'published': state.get("score_published"),
+                'score': state.get("score"),
+                'annotated': state.get("annotated_filename"),
+                'comment': state.get("comment", ''),
+            }
+
+        query = StudentModule.objects.filter(
+            course_id=self.xmodule_runtime.course_id,
+            module_state_key=self.location
+        )
 
         return {
-            'assignments': list(get_student_data()),
+            'assignments': [get_student_data(module) for module in query],
             'max_score': self.max_score(),
         }
 
@@ -320,24 +269,24 @@ class StaffGradedAssignmentXBlock(XBlock):
 
     @XBlock.handler
     def upload_assignment(self, request, suffix=''):
-        require(self.upload_allowed())
+        assert self.upload_allowed()
         upload = request.params['assignment']
-        sha1 = _get_sha1(upload.file)
-        answer = {
-            "sha1": sha1,
-            "filename": upload.file.name,
-            "mimetype": mimetypes.guess_type(upload.file.name)[0],
-        }
-        student_id = self.student_submission_id()
-        submissions_api.create_submission(student_id, answer)
-        path = _file_storage_path(str(self.location), sha1, upload.file.name)
+        self.uploaded_sha1 = _get_sha1(upload.file)
+        self.uploaded_filename = upload.file.name
+        self.uploaded_mimetype = mimetypes.guess_type(upload.file.name)[0]
+        self.uploaded_timestamp = _now()
+        path = _file_storage_path(
+            self.location.to_deprecated_string(),
+            self.uploaded_sha1,
+            self.uploaded_filename
+        )
         if not default_storage.exists(path):
             default_storage.save(path, File(upload.file))
         return Response(json_body=self.student_state())
 
     @XBlock.handler
     def staff_upload_annotated(self, request, suffix=''):
-        require(self.is_course_staff())
+        assert self.is_course_staff()
         upload = request.params['annotated']
         module = StudentModule.objects.get(pk=request.params['module_id'])
         state = json.loads(module.state)
@@ -347,7 +296,11 @@ class StaffGradedAssignmentXBlock(XBlock):
         state['annotated_timestamp'] = _now().strftime(
             DateTime.DATETIME_FORMAT
         )
-        path = _file_storage_path(str(self.location), sha1, filename)
+        path = _file_storage_path(
+            self.location.to_deprecated_string(),
+            sha1,
+            filename
+        )
         if not default_storage.exists(path):
             default_storage.save(path, File(upload.file))
         module.state = json.dumps(state)
@@ -356,15 +309,24 @@ class StaffGradedAssignmentXBlock(XBlock):
 
     @XBlock.handler
     def download_assignment(self, request, suffix=''):
-        answer = self.get_submission()['answer']
         path = _file_storage_path(
-            str(self.location), answer['sha1'], answer['filename'])
-        return self.download(path, answer['mimetype'], answer['filename'])
+            self.location.to_deprecated_string(),
+            self.uploaded_sha1,
+            self.uploaded_filename
+        )
+        return self.download(
+            path,
+            self.uploaded_mimetype,
+            self.uploaded_filename
+        )
 
     @XBlock.handler
     def download_annotated(self, request, suffix=''):
         path = _file_storage_path(
-            str(self.location), self.annotated_sha1, self.annotated_filename)
+            self.location.to_deprecated_string(),
+            self.annotated_sha1,
+            self.annotated_filename
+        )
         return self.download(
             path,
             self.annotated_mimetype,
@@ -373,20 +335,27 @@ class StaffGradedAssignmentXBlock(XBlock):
 
     @XBlock.handler
     def staff_download(self, request, suffix=''):
-        require(self.is_course_staff())
-        submission = self.get_submission(request.params['student_id'])
-        answer = submission['answer']
-        path = _file_storage_path(
-            str(self.location), answer['sha1'], answer['filename'])
-        return self.download(path, answer['mimetype'], answer['filename'])
-
-    @XBlock.handler
-    def staff_download_annotated(self, request, suffix=''):
-        require(self.is_course_staff())
+        assert self.is_course_staff()
         module = StudentModule.objects.get(pk=request.params['module_id'])
         state = json.loads(module.state)
         path = _file_storage_path(
-            str(self.location),
+            module.module_state_key.to_deprecated_string(),
+            state['uploaded_sha1'],
+            state['uploaded_filename']
+        )
+        return self.download(
+            path,
+            state['uploaded_mimetype'],
+            state['uploaded_filename']
+        )
+
+    @XBlock.handler
+    def staff_download_annotated(self, request, suffix=''):
+        assert self.is_course_staff()
+        module = StudentModule.objects.get(pk=request.params['module_id'])
+        state = json.loads(module.state)
+        path = _file_storage_path(
+            module.module_state_key.to_deprecated_string(),
             state['annotated_sha1'],
             state['annotated_filename']
         )
@@ -397,7 +366,7 @@ class StaffGradedAssignmentXBlock(XBlock):
         )
 
     def download(self, path, mimetype, filename):
-        BLOCK_SIZE = (1<<10) * 8  # 8kb
+        BLOCK_SIZE = 2**10 * 8  # 8kb
         file = default_storage.open(path)
         app_iter = iter(partial(file.read, BLOCK_SIZE), '')
         return Response(
@@ -407,35 +376,37 @@ class StaffGradedAssignmentXBlock(XBlock):
 
     @XBlock.handler
     def get_staff_grading_data(self, request, suffix=''):
-        require(self.is_course_staff())
+        assert self.is_course_staff()
         return Response(json_body=self.staff_grading_data())
 
     @XBlock.handler
     def enter_grade(self, request, suffix=''):
-        require(self.is_course_staff())
+        assert self.is_course_staff()
         module = StudentModule.objects.get(pk=request.params['module_id'])
         state = json.loads(module.state)
-        score = int(request.params['grade'])
-        if self.is_instructor():
-            uuid = request.params['submission_id']
-            submissions_api.set_score(uuid, score, self.max_score())
-        else:
-            state['staff_score'] = score
+        state['score'] = float(request.params['grade'])
         state['comment'] = request.params.get('comment', '')
+        state['score_published'] = False    # see student_view
         module.state = json.dumps(state)
-        module.save()
 
+        # This is how we'd like to do it.  See student_view
+        # self.runtime.publish(self, 'grade', {
+        #     'value': state['score'],
+        #     'max_value': self.max_score(),
+        #     'user_id': module.student.id
+        # })
+
+        module.save()
         return Response(json_body=self.staff_grading_data())
 
     @XBlock.handler
     def remove_grade(self, request, suffix=''):
-        require(self.is_course_staff())
-        student_id = request.params['student_id']
-        submissions_api.reset_score(student_id, self.course_id, self.block_id)
+        assert self.is_course_staff()
         module = StudentModule.objects.get(pk=request.params['module_id'])
         state = json.loads(module.state)
-        state['staff_score'] = None
+        state['score'] = None
         state['comment'] = ''
+        state['score_published'] = False    # see student_view
         state['annotated_sha1'] = None
         state['annotated_filename'] = None
         state['annotated_mimetype'] = None
@@ -446,9 +417,6 @@ class StaffGradedAssignmentXBlock(XBlock):
 
     def is_course_staff(self):
         return getattr(self.xmodule_runtime, 'user_is_staff', False)
-
-    def is_instructor(self):
-        return self.xmodule_runtime.get_user_role() == 'instructor'
 
     def show_staff_grading_interface(self):
         in_studio_preview = self.scope_ids.user_id is None
@@ -465,6 +433,7 @@ class StaffGradedAssignmentXBlock(XBlock):
 
 
 def _file_storage_path(url, sha1, filename):
+    assert url.startswith("i4x://")
     path = url[6:] + '/' + sha1
     path += os.path.splitext(filename)[1]
     return path
@@ -504,11 +473,3 @@ def render_template(template_path, context={}):
     template_str = load_resource(template_path)
     template = Template(template_str)
     return template.render(Context(context))
-
-
-def require(assertion):
-    """
-    Raises PermissionDenied if assertion is not true.
-    """
-    if not assertion:
-        raise PermissionDenied
