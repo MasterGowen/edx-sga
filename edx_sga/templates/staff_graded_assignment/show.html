@@ -3,7 +3,6 @@
 <div class="sga-block" data-state="{{ student_state }}" 
      data-staff="{{ is_course_staff }}">
   <script type="text/template" id="sga-tmpl">
-  <h1>Upload your file</h1>
     <% if (uploaded) { %>
       <p><b>Загруженный файл: </b>
         <a href="<%= downloadUrl %>"><%= uploaded.filename %></a></p>
